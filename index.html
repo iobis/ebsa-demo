@@ -102,36 +102,69 @@
         .time-slider-wrapper {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 15px;
         }
         
-        .time-slider {
+        .dual-slider-container {
+            position: relative;
             flex: 1;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+        }
+        
+        .dual-slider-track {
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
             height: 6px;
-            border-radius: 3px;
             background: #ddd;
-            outline: none;
-            -webkit-appearance: none;
-            appearance: none;
+            border-radius: 3px;
+            transform: translateY(-50%);
         }
         
-        .time-slider::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            appearance: none;
-            width: 18px;
-            height: 18px;
-            border-radius: 50%;
+        .dual-slider-track-active {
+            position: absolute;
+            top: 50%;
+            height: 6px;
             background: #2c7bb6;
-            cursor: pointer;
+            border-radius: 3px;
+            transform: translateY(-50%);
+            transition: all 0.1s;
         }
         
-        .time-slider::-moz-range-thumb {
+        .dual-slider-handle {
+            position: absolute;
+            top: 50%;
             width: 18px;
             height: 18px;
-            border-radius: 50%;
             background: #2c7bb6;
-            cursor: pointer;
-            border: none;
+            border: 2px solid white;
+            border-radius: 50%;
+            cursor: grab;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            z-index: 2;
+            touch-action: none;
+        }
+        
+        .dual-slider-handle:active {
+            cursor: grabbing;
+            z-index: 3;
+        }
+        
+        .dual-slider-handle.handle-start {
+            z-index: 2;
+        }
+        
+        .dual-slider-handle.handle-end {
+            z-index: 2;
+        }
+        
+        .dual-slider-handle.dragging {
+            z-index: 4;
         }
         
         .time-slider-value {
@@ -155,8 +188,10 @@ function renderMap(element) {
     const mapId = uniqueId + "_map";
     const legendId = uniqueId + "_legend";
 
-    const sliderId = uniqueId + "_slider";
-    const sliderValueId = uniqueId + "_slider_value";
+    const startSliderId = uniqueId + "_start_slider";
+    const endSliderId = uniqueId + "_end_slider";
+    const startValueId = uniqueId + "_start_value";
+    const endValueId = uniqueId + "_end_value";
     
     container.innerHTML = `
         <div class="map-container" style="height: 100%; width: 100%; position: relative;">
@@ -170,10 +205,16 @@ function renderMap(element) {
                 <div><span style="background:#d7191c;margin-right:6px;"></span>&gt;10,000</div>
             </div>
             <div class="time-slider-container">
-                <label>End year</label>
+                <label>Year range</label>
                 <div class="time-slider-wrapper">
-                    <input type="range" id="${sliderId}" class="time-slider" min="1950" max="2026" value="2026" step="1">
-                    <span id="${sliderValueId}" class="time-slider-value">2026</span>
+                    <span id="${startValueId}" class="time-slider-value">1900</span>
+                    <div class="dual-slider-container" id="${uniqueId}_slider_container">
+                        <div class="dual-slider-track"></div>
+                        <div id="${uniqueId}_active_track" class="dual-slider-track-active"></div>
+                        <div id="${startSliderId}" class="dual-slider-handle handle-start"></div>
+                        <div id="${endSliderId}" class="dual-slider-handle handle-end"></div>
+                    </div>
+                    <span id="${endValueId}" class="time-slider-value">2025</span>
                 </div>
             </div>
         </div>
@@ -255,9 +296,18 @@ function renderMap(element) {
     });
 
     map.on("load", function() {
-        function updateOccurrenceSource(year) {
-            const enddate = `${year}-12-31`;
-            const tilesUrl = `https://api.obis.org/occurrence/tile/{x}/{y}/{z}.mvt?cellspertile=200&enddate=${enddate}`;
+        function updateOccurrenceSource(startYear, endYear) {
+            const params = ['cellspertile=200'];
+            
+            if (startYear !== 1900) {
+                params.push(`startdate=${startYear}-01-01`);
+            }
+            
+            if (endYear !== 2025) {
+                params.push(`enddate=${endYear}-12-31`);
+            }
+            
+            const tilesUrl = `https://api.obis.org/occurrence/tile/{x}/{y}/{z}.mvt?${params.join('&')}`;
             
             if (map.getSource("occurrence")) {
                 map.getSource("occurrence").setTiles([tilesUrl]);
@@ -270,8 +320,9 @@ function renderMap(element) {
             }
         }
         
-        const initialYear = 2026;
-        updateOccurrenceSource(initialYear);
+        const initialStartYear = 1900;
+        const initialEndYear = 2025;
+        updateOccurrenceSource(initialStartYear, initialEndYear);
 
         map.addLayer({
             id: "obis-occurrence-layer-" + uniqueId,
@@ -293,17 +344,114 @@ function renderMap(element) {
             }
         });
         
-        const slider = document.getElementById(sliderId);
-        const sliderValue = document.getElementById(sliderValueId);
-        sliderValue.textContent = initialYear;
-        slider.addEventListener('input', function() {
-            const year = parseInt(this.value);
-            sliderValue.textContent = year;
+        const startHandle = document.getElementById(startSliderId);
+        const endHandle = document.getElementById(endSliderId);
+        const startValue = document.getElementById(startValueId);
+        const endValue = document.getElementById(endValueId);
+        const activeTrack = document.getElementById(uniqueId + "_active_track");
+        const sliderContainer = document.getElementById(uniqueId + "_slider_container");
+        
+        const minYear = 1900;
+        const maxYear = 2025;
+        let currentStartYear = initialStartYear;
+        let currentEndYear = initialEndYear;
+        let draggingHandle = null;
+        
+        function yearToPercent(year) {
+            return ((year - minYear) / (maxYear - minYear)) * 100;
+        }
+        
+        function percentToYear(percent) {
+            return Math.round(minYear + (percent / 100) * (maxYear - minYear));
+        }
+        
+        function updateHandles() {
+            const startPercent = yearToPercent(currentStartYear);
+            const endPercent = yearToPercent(currentEndYear);
+            
+            startHandle.style.left = startPercent + '%';
+            endHandle.style.left = endPercent + '%';
+            
+            activeTrack.style.left = startPercent + '%';
+            activeTrack.style.width = (endPercent - startPercent) + '%';
+            
+            startValue.textContent = currentStartYear;
+            endValue.textContent = currentEndYear;
+        }
+        
+        function startDrag(e, handle) {
+            e.preventDefault();
+            draggingHandle = handle;
+            handle.classList.add('dragging');
+            document.addEventListener('mousemove', onDrag);
+            document.addEventListener('mouseup', stopDrag);
+            document.addEventListener('touchmove', onDrag);
+            document.addEventListener('touchend', stopDrag);
+        }
+        
+        function onDrag(e) {
+            if (!draggingHandle) return;
+            
+            const rect = sliderContainer.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            let percent = ((clientX - rect.left) / rect.width) * 100;
+            percent = Math.max(0, Math.min(100, percent));
+            const year = percentToYear(percent);
+            
+            if (draggingHandle === startHandle) {
+                currentStartYear = Math.min(year, currentEndYear);
+            } else {
+                currentEndYear = Math.max(year, currentStartYear);
+            }
+            
+            updateHandles();
+        }
+        
+        function stopDrag() {
+            if (draggingHandle) {
+                draggingHandle.classList.remove('dragging');
+                draggingHandle = null;
+                updateOccurrenceSource(currentStartYear, currentEndYear);
+            }
+            document.removeEventListener('mousemove', onDrag);
+            document.removeEventListener('mouseup', stopDrag);
+            document.removeEventListener('touchmove', onDrag);
+            document.removeEventListener('touchend', stopDrag);
+        }
+        
+        startHandle.addEventListener('mousedown', (e) => startDrag(e, startHandle));
+        startHandle.addEventListener('touchstart', (e) => startDrag(e, startHandle));
+        endHandle.addEventListener('mousedown', (e) => startDrag(e, endHandle));
+        endHandle.addEventListener('touchstart', (e) => startDrag(e, endHandle));
+        
+        // Allow clicking on track to move nearest handle
+        sliderContainer.addEventListener('click', function(e) {
+            if (e.target === startHandle || e.target === endHandle || e.target === activeTrack || e.target.classList.contains('dual-slider-track')) {
+                return;
+            }
+            
+            const rect = sliderContainer.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const percent = (clickX / rect.width) * 100;
+            const year = percentToYear(percent);
+            
+            const startPercent = yearToPercent(currentStartYear);
+            const endPercent = yearToPercent(currentEndYear);
+            
+            const distToStart = Math.abs(percent - startPercent);
+            const distToEnd = Math.abs(percent - endPercent);
+            
+            if (distToStart < distToEnd) {
+                currentStartYear = Math.min(year, currentEndYear);
+            } else {
+                currentEndYear = Math.max(year, currentStartYear);
+            }
+            
+            updateHandles();
+            updateOccurrenceSource(currentStartYear, currentEndYear);
         });
-        slider.addEventListener('change', function() {
-            const year = parseInt(this.value);
-            updateOccurrenceSource(year);
-        });
+        
+        updateHandles();
 
         map.addControl(new maplibregl.ScaleControl({
             maxWidth: 100,
