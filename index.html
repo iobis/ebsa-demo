@@ -282,8 +282,8 @@ function renderMap(element) {
                     source: "ebsa",
                     "source-layer": "ebsa",
                     paint: {
-                        "line-color": "#000000",
-                        "line-width": 0.5,
+                        "line-color": "#fc0366",
+                        "line-width": 3,
                         "line-opacity": 0.3
                     }
                 }
@@ -424,7 +424,6 @@ function renderMap(element) {
         endHandle.addEventListener('mousedown', (e) => startDrag(e, endHandle));
         endHandle.addEventListener('touchstart', (e) => startDrag(e, endHandle));
         
-        // Allow clicking on track to move nearest handle
         sliderContainer.addEventListener('click', function(e) {
             if (e.target === startHandle || e.target === endHandle || e.target === activeTrack || e.target.classList.contains('dual-slider-track')) {
                 return;
